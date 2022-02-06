@@ -8,7 +8,7 @@ namespace Ding_Dong_Discord_Bot.Utitlity
     class SongQueue
     {
         private readonly Queue<LavalinkTrack> playlist = new Queue<LavalinkTrack>();
-        public bool isPlaying;
+        //public bool isPlaying;
         public void AddTrack(LavalinkTrack track_)
         {
             playlist.Enqueue(track_);

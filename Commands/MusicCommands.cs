@@ -20,7 +20,7 @@ namespace Ding_Dong_Discord_Bot.Commands
 
         [Command("join")]
         [Description("Makes the bot join the specified channel")]
-        public async Task JoinVC(CommandContext ctx_)
+        public async Task TJoinVC(CommandContext ctx_)
         {
             //Check if there is a connection to lavalink...
             var Laval = ctx_.Client.GetLavalink();
@@ -41,10 +41,9 @@ namespace Ding_Dong_Discord_Bot.Commands
             await node.Value.ConnectAsync(currentChannel);
             //await ctx_.RespondAsync($"Join {currentChannel.Name}!");
         }
-
         [Command("leave")]
         [Description("Makes the bot leave the specified channel")]
-        public async Task LeaveVC(CommandContext ctx_)
+        public async Task TLeaveVC(CommandContext ctx_)
         {
             var currentChannel = ctx_.Member.VoiceState.Channel;
             //Check if there is a connection to lavalink...
@@ -68,64 +67,45 @@ namespace Ding_Dong_Discord_Bot.Commands
                 await ctx_.RespondAsync("Lavalink is not Connected");
                 return;
             }
-
-            await conn.DisconnectAsync();
-            await ctx_.RespondAsync($"Left: {currentChannel.Name}");
+           await ClearSongList();
+           await conn.DisconnectAsync();
         }
-
-        [Command("play"), Priority(0)]
-        [Description("plays a song in voice chat")]
-        public async Task Play(CommandContext ctx_, [RemainingText] string search_)
+        [Command("play")]
+        [Description("plays songs in voice chat")]
+        public async Task TPlay(CommandContext ctx_)
         {
-            await JoinVC(ctx_);
+            //join and check if bot is in a channel
+            await TJoinVC(ctx_);
             if (ctx_.Member.VoiceState == null || ctx_.Member.VoiceState.Channel == null)
             {             
                 await ctx_.RespondAsync("Not in a Channel");
                 return;
             }
-            if (laval == null || node == null || conn == null)
+            //check connections
+            await EstablishConnection(ctx_);
+            if (queue.ReturnTrack().Count > 0)
             {
-                laval = ctx_.Client.GetLavalink();
-                node = laval.ConnectedNodes.Values.First();
-                conn = node.GetGuildConnection(ctx_.Member.VoiceState.Guild);
-            }
-            //search for track
-            var loadresult = await node.Rest.GetTracksAsync(search_);
-
-            if (loadresult.LoadResultType == LavalinkLoadResultType.LoadFailed || loadresult.LoadResultType == LavalinkLoadResultType.NoMatches)
-            {
-                await ctx_.RespondAsync($"Track search failed for {search_}.");
-                return;
-            }
-            //add track to song queue
-            queue.AddTrack(loadresult.Tracks.First());
-        
-            if (queue.ReturnTrack().Count >= 0)
-            { 
                 await conn.PlayAsync(queue.ReturnTrack().Peek());
-                await ctx_.RespondAsync($"Now playing {queue.ReturnTrack().Peek().Title}");
+                await ctx_.RespondAsync($"Now playing: **{queue.ReturnTrack().Peek().Title}**");
+                conn.PlaybackFinished += Player_PlaybackFinished;
             }
             else
-                await ctx_.RespondAsync("There is no tracks in the qeueu!");
-            conn.PlaybackFinished += Player_PlaybackFinished;
+            {
+                await ctx_.RespondAsync("There is no tracks in the queue!");
+                return;
+            }
         }
-
         [Command("add")]
-        [Description("Adds a track to the queue")]
-        public async Task Addtrack(CommandContext ctx_, [RemainingText] string search_)
+        [Description("Adds a track to the song list")]
+        public async Task TAddtrack(CommandContext ctx_, [RemainingText] string search_)
         {
-            //check if the bot is in the correct bot 
+            //check if the bot is in the correct channel/connection
             if (ctx_.Member.VoiceState == null || ctx_.Member.VoiceState.Channel == null)
             {
                 await ctx_.RespondAsync("Not in a Channel");
                 return;
             }
-            if (laval == null || node == null || conn == null)
-            {
-              laval = ctx_.Client.GetLavalink();
-              node = laval.ConnectedNodes.Values.First();
-              conn = node.GetGuildConnection(ctx_.Member.VoiceState.Guild);
-            }
+            await EstablishConnection(ctx_);
             var loadresult = await node.Rest.GetTracksAsync(search_);
 
             if (loadresult.LoadResultType == LavalinkLoadResultType.LoadFailed || loadresult.LoadResultType == LavalinkLoadResultType.NoMatches)
@@ -133,49 +113,95 @@ namespace Ding_Dong_Discord_Bot.Commands
                 await ctx_.RespondAsync($"Track search failed for {search_}.");
                 return;
             }
+            //Add track to the 
             var track = loadresult.Tracks.First();
             queue.AddTrack(track);
-            await ctx_.RespondAsync($"{track.Title} has been added");
+            await ctx_.RespondAsync($"**{track.Title}** has been added");
         }
-
-        [Command("pause")]
+        [Command("stop")]
         [Description("Pause current song in voice chat")]
-        public async Task Pause(CommandContext ctx_)
+        public async Task TStop(CommandContext ctx_)
         {
             if (ctx_.Member.VoiceState == null || ctx_.Member.VoiceState.Channel == null)
             {
                 await ctx_.RespondAsync("You are not in a voice Channel");
                 return;
             }
-
-            LavalinkExtension laval = ctx_.Client.GetLavalink();
-            LavalinkNodeConnection node = laval.ConnectedNodes.Values.First();
-            LavalinkGuildConnection conn = node.GetGuildConnection(ctx_.Member.VoiceState.Guild);
+            await EstablishConnection(ctx_);
             if (conn == null)
             {
                 await ctx_.RespondAsync("lavalink is not connected");
                 return;
             }
-
             if (conn.CurrentState.CurrentTrack == null)
             {
                 await ctx_.RespondAsync("There is no tracks loaded");
                 return;
             }
 
-            await conn.PauseAsync();
+            await conn.StopAsync();
         }
-
-       private async Task PlayNext()
-       {
+        [Command("clean")]
+        [Description("Clears the song list")]
+        public async Task TClearSonglist(CommandContext ctx_)
+        {
+            await TStop(ctx_);
+            await ClearSongList();
+            await new DiscordMessageBuilder()
+                    .WithContent("Song List has been cleaned!")
+                    .SendAsync(ctx_.Channel);
+        }
+        [Command("queue")]
+        [Description("Displays the list of song in the playback")]
+        public async Task TListqueuedtracks(CommandContext ctx_)
+        {
+            if (queue.ReturnTrack().Count > 0)
+            {
+                await new DiscordMessageBuilder()
+                    .WithContent("**Here are the songs listed:**")
+                    .SendAsync(ctx_.Channel);
+                foreach (LavalinkTrack t in queue.ReturnTrack())
+                {
+                    await new DiscordMessageBuilder()
+                          .WithContent($"- {t.Title}")
+                          .SendAsync(ctx_.Channel);
+                }
+            }
+            else
+            {
+                await new DiscordMessageBuilder()
+                    .WithContent("No songs are currently queued!")
+                    .SendAsync(ctx_.Channel);
+            }
+        }
+        private async Task PlayNext()
+        {
             queue.RemoveTrack();
-            await conn.PlayAsync(queue.ReturnTrack().Peek());          
-       }
-
-       private async Task Player_PlaybackFinished(LavalinkGuildConnection con_, TrackFinishEventArgs e_)
-       {
+            await conn.PlayAsync(queue.ReturnTrack().Peek());
+            await new DiscordMessageBuilder()
+                  .WithContent($"Now playing: **{queue.ReturnTrack().Peek().Title}**")
+                  .SendAsync(conn.Channel);
+        }
+        private async Task Player_PlaybackFinished(LavalinkGuildConnection con_, TrackFinishEventArgs e_)
+        {
             await Task.Delay(500);
             await PlayNext();
         }
+        private async Task ClearSongList()
+        {
+            if (conn != null)
+            {
+                queue.ClearTracks();
+                await Task.CompletedTask;
+            }
+        }
+        private async Task EstablishConnection(CommandContext ctx_)
+        {
+            laval = ctx_.Client.GetLavalink();
+            node = laval.ConnectedNodes.Values.First();
+            conn = node.GetGuildConnection(ctx_.Member.VoiceState.Guild);
+            await Task.CompletedTask;
+        }
+
     }
 }
